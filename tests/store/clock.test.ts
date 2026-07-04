@@ -8,6 +8,7 @@ function visibilityPlatform(): { platform: Platform; setVisible: (v: boolean) =>
   const platform: Platform = {
     loadState: vi.fn().mockResolvedValue(null),
     saveState: vi.fn().mockResolvedValue(undefined),
+    flushState: vi.fn().mockResolvedValue(undefined),
     exportJson: vi.fn().mockResolvedValue(undefined),
     importJson: vi.fn().mockResolvedValue(null),
     onVisibilityChange: (fn) => {

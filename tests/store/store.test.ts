@@ -8,6 +8,7 @@ function mockPlatform(overrides: Partial<Platform> = {}): Platform {
   return {
     loadState: vi.fn().mockResolvedValue(null),
     saveState: vi.fn().mockResolvedValue(undefined),
+    flushState: vi.fn().mockResolvedValue(undefined),
     exportJson: vi.fn().mockResolvedValue(undefined),
     importJson: vi.fn().mockResolvedValue(null),
     onVisibilityChange: vi.fn().mockReturnValue(() => {}),
@@ -115,18 +116,21 @@ describe('debounced persistence', () => {
     expect(platform.saveState).not.toHaveBeenCalled();
   });
 
-  it('flush() forces the pending save now and clears the timer', async () => {
+  it('flush() forces a flush_state write now and clears the timer', async () => {
     vi.useFakeTimers();
     const platform = mockPlatform();
     const store = createTaskStore(platform, { debounceMs: 500 });
 
     store.dispatch(createBlock('r', 'w'));
     await store.flush();
-    expect(platform.saveState).toHaveBeenCalledTimes(1);
+    // Close path uses flushState (flush_state), not the debounced saveState.
+    expect(platform.flushState).toHaveBeenCalledTimes(1);
+    expect(platform.saveState).not.toHaveBeenCalled();
 
     // The debounced timer must have been cancelled by the flush.
     vi.advanceTimersByTime(1000);
-    expect(platform.saveState).toHaveBeenCalledTimes(1);
+    expect(platform.flushState).toHaveBeenCalledTimes(1);
+    expect(platform.saveState).not.toHaveBeenCalled();
   });
 });
 

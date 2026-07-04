@@ -63,21 +63,30 @@ export function createTaskStore(platform: Platform, options: StoreOptions = {}):
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let saveDirty = false;
 
-  const persistNow = async (): Promise<void> => {
+  const clearSaveTimer = () => {
     if (saveTimer !== null) {
       clearTimeout(saveTimer);
       saveTimer = null;
     }
-    if (!saveDirty) return;
+  };
+
+  // Write the current state to the platform. Normal (debounced) writes use
+  // saveState; the close-path flush uses flushState (D10) — functionally
+  // identical on the Rust side, but a distinct command so the close-flush call
+  // site is explicit.
+  const writeState = async (useFlushCommand: boolean): Promise<void> => {
+    clearSaveTimer();
     saveDirty = false;
-    await platform.saveState(JSON.stringify(get(appState)));
+    const json = JSON.stringify(get(appState));
+    if (useFlushCommand) await platform.flushState(json);
+    else await platform.saveState(json);
   };
 
   const schedulePersist = () => {
     saveDirty = true;
-    if (saveTimer !== null) clearTimeout(saveTimer);
+    clearSaveTimer();
     saveTimer = setTimeout(() => {
-      void persistNow();
+      if (saveDirty) void writeState(false);
     }, debounceMs);
   };
 
@@ -107,7 +116,10 @@ export function createTaskStore(platform: Platform, options: StoreOptions = {}):
     schedulePersist();
   };
 
-  const flush = (): Promise<void> => persistNow();
+  // Force a flush of the latest state on the close path (D10). Writes
+  // unconditionally via flushState so nothing from the last debounce window is
+  // lost, and cancels any pending debounced save.
+  const flush = (): Promise<void> => writeState(true);
 
   const load = async (): Promise<void> => {
     const json = await platform.loadState();

@@ -18,6 +18,11 @@ export function createTauriPlatform(): Platform {
       await invoke('save_state', { json });
     },
 
+    async flushState(json: string): Promise<void> {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('flush_state', { json });
+    },
+
     async exportJson(json: string): Promise<void> {
       const { invoke } = await import('@tauri-apps/api/core');
       // Rust maps camelCase args to snake_case (`default_file_name`).

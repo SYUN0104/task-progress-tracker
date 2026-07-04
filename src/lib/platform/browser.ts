@@ -27,6 +27,15 @@ export function createBrowserPlatform(): Platform {
       }
     },
 
+    async flushState(json: string): Promise<void> {
+      // No separate flush path in the browser; localStorage writes synchronously.
+      try {
+        localStorage.setItem(STORAGE_KEY, json);
+      } catch {
+        // Quota exceeded or storage disabled: nothing more we can do in dev.
+      }
+    },
+
     async exportJson(json: string): Promise<void> {
       const blob = new Blob([json], { type: 'application/json' });
       const url = URL.createObjectURL(blob);

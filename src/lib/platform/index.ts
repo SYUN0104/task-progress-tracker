@@ -8,6 +8,13 @@ export interface Platform {
   loadState(): Promise<string | null>;
   /** Persist the state JSON (atomic replace on the Tauri side, D7). */
   saveState(json: string): Promise<void>;
+  /**
+   * Force-persist the state JSON on the close path (D10). Awaited inside the
+   * close handler before the window is allowed to close. Functionally identical
+   * to saveState on the Rust side (a distinct `flush_state` command) — kept
+   * separate so the close-flush call site reads as intentional.
+   */
+  flushState(json: string): Promise<void>;
   /** Export the state JSON to a user-chosen location (manual backup). */
   exportJson(json: string): Promise<void>;
   /** Import a JSON file chosen by the user; null when cancelled. */
