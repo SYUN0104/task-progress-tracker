@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-capability",
+  "description": "Capability for the main window. Grants core defaults only (window/event APIs, e.g. listening for CloseRequested to drive the D10 close-flush). This app's own commands (save_state/load_state/flush_state/export_json/import_json) are app-level, not plugin, commands, so they aren't gated by the ACL and need no entry here.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

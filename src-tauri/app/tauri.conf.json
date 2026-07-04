@@ -11,6 +11,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Task Progress Tracker",
         "width": 1280,
         "height": 800,
