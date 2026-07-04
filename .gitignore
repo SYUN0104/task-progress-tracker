@@ -4,6 +4,10 @@ dist-ssr
 src-tauri/target
 *.local
 
+# Playwright output (test-results/, HTML report, traces)
+test-results/
+playwright-report/
+
 # Local operational artifacts (not for publication)
 .omc/
 .asset/

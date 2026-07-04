@@ -122,6 +122,13 @@
 
   function handleContextMenu(e: MouseEvent) {
     e.preventDefault();
+    // BlockNode nests recursively and `contextmenu` bubbles: without this, a
+    // right-click on a CHILD block also reaches every ancestor BlockNode's own
+    // oncontextmenu handler, and since each just overwrites the same
+    // `menuRequest`, the LAST (outermost) handler to run would silently
+    // replace the child's menu with the parent's — right-clicking a nested
+    // block would open the wrong (ancestor's) context menu.
+    e.stopPropagation();
     if (sectionContext === 'hold' || isDimmed) return; // no menu for these (AC26)
     const items =
       sectionContext === 'active'

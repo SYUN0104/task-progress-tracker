@@ -8,6 +8,14 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig({
   plugins: [svelte()],
 
+  // Vitest (via `npm test`) reads its config from this file by default and
+  // would otherwise also collect tests/e2e/*.spec.ts — those import `test`
+  // from @playwright/test, not Vitest, and are already run separately via
+  // `npx playwright test` (see playwright.config.ts).
+  test: {
+    exclude: ['tests/e2e/**', 'node_modules/**'],
+  },
+
   // Vite options tailored for Tauri development.
   clearScreen: false,
   server: {
