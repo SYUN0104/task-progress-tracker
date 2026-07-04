@@ -102,3 +102,41 @@ describe('validateAppState — accepts and normalizes valid input', () => {
     expect(result).not.toHaveProperty('extra');
   });
 });
+
+describe('validateAppState — referential integrity', () => {
+  it('rejects a parentId cycle (a↔b) that would spin ancestry walks forever', () => {
+    const a = fullBlock({ id: 'a', parentId: 'b' });
+    const b = fullBlock({ id: 'b', parentId: 'a' });
+    expect(validateAppState(stateWith([a, b]))).toBeNull();
+  });
+
+  it('rejects a self-referential parentId', () => {
+    expect(validateAppState(stateWith([fullBlock({ id: 'a', parentId: 'a' })]))).toBeNull();
+  });
+
+  it('rejects a dangling parentId (no such block)', () => {
+    expect(validateAppState(stateWith([fullBlock({ id: 'a', parentId: 'ghost' })]))).toBeNull();
+  });
+
+  it('rejects a dangling workUnitId (no such column)', () => {
+    expect(validateAppState(stateWith([fullBlock({ id: 'a', workUnitId: 'nope' })]))).toBeNull();
+  });
+
+  it('rejects duplicate block / work-unit ids', () => {
+    expect(validateAppState(stateWith([fullBlock({ id: 'dup' }), fullBlock({ id: 'dup' })]))).toBeNull();
+    expect(
+      validateAppState(stateWith([fullBlock()], [{ id: 'w1', order: 0 }, { id: 'w1', order: 1 }])),
+    ).toBeNull();
+  });
+
+  it('accepts a valid deep parent chain a→b→c→root', () => {
+    const chain = [
+      fullBlock({ id: 'c', parentId: null }),
+      fullBlock({ id: 'b', parentId: 'c' }),
+      fullBlock({ id: 'a', parentId: 'b' }),
+    ];
+    const result = validateAppState(stateWith(chain));
+    expect(result).not.toBeNull();
+    expect(result!.blocks).toHaveLength(3);
+  });
+});

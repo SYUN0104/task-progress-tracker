@@ -144,5 +144,42 @@ export function validateAppState(input: unknown): AppState | null {
     workUnits.push(workUnit);
   }
 
+  // --- referential integrity -------------------------------------------------
+  // Field-shape checks alone can't stop a doctored import from corrupting the
+  // tree: a dangling parentId/workUnitId renders as an invisible orphan, and a
+  // parentId cycle makes tree.ts's ancestry walks (topLevelAncestorId,
+  // subtreeIds) spin forever since they have no visited guard. Enforce it here.
+
+  // Ids must be unique (they are the domain's lookup keys).
+  const blockIds = new Set<string>();
+  for (const b of blocks) {
+    if (blockIds.has(b.id)) return null; // duplicate block id
+    blockIds.add(b.id);
+  }
+  const workUnitIds = new Set<string>();
+  for (const w of workUnits) {
+    if (workUnitIds.has(w.id)) return null; // duplicate work unit id
+    workUnitIds.add(w.id);
+  }
+
+  // Every reference must resolve to something in this same state.
+  for (const b of blocks) {
+    if (b.parentId !== null && !blockIds.has(b.parentId)) return null; // dangling parent
+    if (!workUnitIds.has(b.workUnitId)) return null; // dangling work unit
+  }
+
+  // Every parentId chain must terminate at a root (parentId === null); a revisit
+  // means a cycle. Existence checks above don't catch a↔b (both ids exist).
+  const byId = new Map(blocks.map((b) => [b.id, b]));
+  for (const start of blocks) {
+    const seen = new Set<string>([start.id]);
+    let parentId = start.parentId;
+    while (parentId !== null) {
+      if (seen.has(parentId)) return null; // cycle detected
+      seen.add(parentId);
+      parentId = byId.get(parentId)!.parentId; // safe: dangling parents rejected above
+    }
+  }
+
   return { blocks, workUnits, theme: input.theme as Theme };
 }
