@@ -31,8 +31,16 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      # Built explicitly (not via beforeBuildCommand): tauri.conf.json lives
+      # one directory deeper than the conventional src-tauri/ location, and
+      # Tauri's before-command hooks run with cwd = the PARENT of the
+      # tauri.conf.json directory (src-tauri/, not src-tauri/app/) -
+      # confirmed empirically, see package.json's "tauri:build" script.
+      # frontendDist ("../../dist") already points at the output of this step.
+      - name: Build frontend
+        run: npm run build
+
       # Tag push: build the NSIS installer and publish a GitHub Release.
-      # tauri-action drives `beforeBuildCommand` (vite build) internally.
       - name: Build and publish release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: tauri-apps/tauri-action@v0

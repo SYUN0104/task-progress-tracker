@@ -4,8 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.seong.tasktracker",
   "build": {
-    "beforeDevCommand": "npm run --prefix ../.. dev",
-    "beforeBuildCommand": "npm run --prefix ../.. build",
+    "beforeDevCommand": "npm run --prefix .. dev",
     "devUrl": "http://localhost:1420",
     "frontendDist": "../../dist"
   },

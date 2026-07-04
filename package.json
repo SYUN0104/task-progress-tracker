@@ -11,7 +11,7 @@
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "tauri": "tauri",
     "tauri:dev": "cd src-tauri/app && tauri dev",
-    "tauri:build": "cd src-tauri/app && tauri build"
+    "tauri:build": "npm run build && cd src-tauri/app && tauri build"
   },
   "devDependencies": {
     "@playwright/test": "^1.48.0",
