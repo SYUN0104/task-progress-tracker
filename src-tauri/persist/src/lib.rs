@@ -5,7 +5,8 @@
 //! webview libraries required to compile the `app` crate.
 //!
 //! Implements plan decision D7 (2-step atomic replace) and D10 (rename
-//! retry with backoff). See `save_state` and `load_state` below.
+//! retry with backoff, also applied to the backup copy). See `save_state`
+//! and `load_state` below.
 
 use std::fmt;
 use std::fs::{self, File};
@@ -18,12 +19,13 @@ const STATE_FILE: &str = "state.json";
 const BACKUP_FILE: &str = "state.json.bak";
 const TMP_FILE: &str = "state.json.tmp";
 
-/// Backoff delays applied before each retry of the final rename step, in
-/// addition to the initial (unblocked) attempt -- so up to 4 total attempts.
-/// Windows AV/file-indexer processes can transiently hold a handle open on
-/// the destination file, causing a spurious `ERROR_ACCESS_DENIED`; a short
-/// wait usually lets the holder release it.
-const RENAME_RETRY_DELAYS_MS: [u64; 3] = [50, 200, 800];
+/// Backoff delays applied before each retry of a filesystem operation (the
+/// final rename, and the backup copy), in addition to the initial (unblocked)
+/// attempt -- so up to 4 total attempts. Windows AV/file-indexer processes
+/// can transiently hold a handle open on the destination file, causing a
+/// spurious `ERROR_ACCESS_DENIED`; a short wait usually lets the holder
+/// release it.
+const RETRY_DELAYS_MS: [u64; 3] = [50, 200, 800];
 
 /// Error type for persistence operations.
 #[derive(Debug)]
@@ -46,7 +48,13 @@ pub type LoadResult = Option<String>;
 ///
 /// Sequence (plan D7):
 /// 1. If `state.json` already exists, copy it to `state.json.bak` (a copy,
-///    not a move, so `state.json` is never briefly absent).
+///    not a move, so `state.json` is never briefly absent). This step is
+///    retried with the same backoff as the final rename, and is
+///    best-effort: if the copy still fails after all retries (e.g. a
+///    Windows AV/indexer lock on `.bak`), the failure is logged and the
+///    save proceeds anyway rather than aborting -- the only loss is a stale
+///    backup, which is acceptable, whereas failing the whole save here
+///    could drop the caller's last edits (see review finding #3).
 /// 2. Write the new content to `state.json.tmp` and `fsync` it, so the bytes
 ///    are durable on disk before anything references the new name.
 /// 3. Atomically rename `state.json.tmp` -> `state.json`. `std::fs::rename`
@@ -64,13 +72,16 @@ pub fn save_state(dir: &Path, json: &str) -> Result<(), PersistError> {
     let tmp_path = dir.join(TMP_FILE);
 
     if state_path.exists() {
-        fs::copy(&state_path, &backup_path).map_err(|e| {
-            PersistError(format!(
-                "failed to back up {} to {}: {e}",
+        if let Err(e) = retry_with_backoff(|| fs::copy(&state_path, &backup_path)) {
+            // Best-effort: a locked/unwritable backup must never block
+            // writing the new state. Log and carry on.
+            eprintln!(
+                "warning: failed to back up {} to {} after {} attempts: {e} -- proceeding without an updated backup",
                 state_path.display(),
-                backup_path.display()
-            ))
-        })?;
+                backup_path.display(),
+                RETRY_DELAYS_MS.len() + 1,
+            );
+        }
     }
 
     {
@@ -86,27 +97,37 @@ pub fn save_state(dir: &Path, json: &str) -> Result<(), PersistError> {
 }
 
 /// Renames `from` to `to`, replacing `to` if it exists. Retries on failure
-/// with the backoff schedule in [`RENAME_RETRY_DELAYS_MS`] (initial attempt
-/// plus up to 3 retries).
+/// with the backoff schedule in [`RETRY_DELAYS_MS`] (initial attempt plus up
+/// to 3 retries).
 fn rename_with_retry(from: &Path, to: &Path) -> Result<(), PersistError> {
+    retry_with_backoff(|| fs::rename(from, to)).map_err(|e| {
+        PersistError(format!(
+            "failed to atomically replace {} after {} attempts: {e}",
+            to.display(),
+            RETRY_DELAYS_MS.len() + 1,
+        ))
+    })
+}
+
+/// Runs `op`, retrying on failure with the backoff schedule in
+/// [`RETRY_DELAYS_MS`] (initial attempt plus up to 3 retries). Returns the
+/// last error if every attempt fails. Shared by [`rename_with_retry`] and the
+/// backup copy in [`save_state`], since both can hit the same transient
+/// "another process holds a handle open" failure.
+fn retry_with_backoff<T>(mut op: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
     let mut last_err = None;
 
-    for delay_ms in std::iter::once(0).chain(RENAME_RETRY_DELAYS_MS) {
+    for delay_ms in std::iter::once(0).chain(RETRY_DELAYS_MS) {
         if delay_ms > 0 {
             thread::sleep(Duration::from_millis(delay_ms));
         }
-        match fs::rename(from, to) {
-            Ok(()) => return Ok(()),
+        match op() {
+            Ok(v) => return Ok(v),
             Err(e) => last_err = Some(e),
         }
     }
 
-    Err(PersistError(format!(
-        "failed to atomically replace {} after {} attempts: {}",
-        to.display(),
-        RENAME_RETRY_DELAYS_MS.len() + 1,
-        last_err.map(|e| e.to_string()).unwrap_or_default()
-    )))
+    Err(last_err.expect("loop runs at least once, so an error was always recorded on failure"))
 }
 
 /// Loads persisted state from `dir`, falling back from `state.json` to its
@@ -243,6 +264,23 @@ mod tests {
             .expect("expected a preserved state.corrupt-*.json file");
 
         assert_eq!(fs::read_to_string(preserved.path()).unwrap(), garbage);
+    }
+
+    #[test]
+    fn backup_copy_failure_does_not_block_save() {
+        let dir = tempdir().unwrap();
+        save_state(dir.path(), r#"{"v":1}"#).unwrap();
+
+        // Make the backup copy fail deterministically and cross-platform by
+        // replacing the .bak path with a directory -- fs::copy refuses to
+        // write a regular file's contents over a directory.
+        fs::create_dir(dir.path().join("state.json.bak")).unwrap();
+
+        // save_state must still succeed and the new payload must land in
+        // state.json: a locked/unwritable backup is best-effort only and
+        // must never block persisting the caller's latest edits.
+        save_state(dir.path(), r#"{"v":2}"#).unwrap();
+        assert_eq!(load_state(dir.path()), Some(r#"{"v":2}"#.to_string()));
     }
 
     #[test]
