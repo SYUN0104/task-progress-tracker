@@ -56,14 +56,13 @@ Legend for **Verification method**:
 | 43 | 블럭 hover 시 '+' 로 하위 블럭 빠른 생성 | e2e — `creation-and-columns.spec.ts` | met |
 | 44 | 서브트리 접기/펼치기 | e2e — `creation-and-columns.spec.ts` | met |
 | 45 | 작업단위별 색상/라벨 커스터마이즈 | e2e — `creation-and-columns.spec.ts` | met |
-| 46 | 오래된 블럭 stale 색/뱃지 | **gap — no automated test.** `staleLevel()` (`src/lib/components/stale.ts`) is a pure function of elapsed-ms with no existing Vitest coverage, and e2e can't wait 4h/24h of wall-clock time to observe it. Recommend a small Vitest unit test injecting synthetic elapsed values (`staleLevel(0)`, `staleLevel(4h)`, `staleLevel(24h)`) — flagged to team lead rather than added here (outside this task's file ownership: `tests/domain`/`tests/store` are other workers' surfaces) | gap |
+| 46 | 오래된 블럭 stale 색/뱃지 | unit — `tests/components/stale.test.ts` (4 tests: none/warn/danger tiers at exact 4h/24h boundaries, derived from exported `STALE_THRESHOLDS` constants) | met |
 | 47 | 다크/라이트 테마 토글 | e2e — `persistence-and-theme.spec.ts` (toggle + persists across reload) | met |
 
 ## Summary
 
-- **41 / 47** ACs have automated coverage (unit and/or e2e) and pass.
+- **42 / 47** ACs have automated coverage (unit and/or e2e) and pass (AC46 closed by `tests/components/stale.test.ts` after this checklist's first draft).
 - **1** (AC35) is met with a documented, user-approved deviation (undo cap).
-- **1** (AC46) is a real coverage gap — reported to the team lead, not fixed here (would require adding a test to `tests/domain` or `tests/store`, which are other workers' file ownership).
 - **4** (AC18, 19, 38, 41) are logically implemented and unit-tested where the logic is host-independent, but need a real Windows 11 + WebView2 run (or a completed CI Release) to fully close out.
 - **2** (AC40, 42) are infra/documentation items: the repo exists and is wired to CI (AC40 done); the README (AC42) is Phase 5 work not yet reached.
 
