@@ -6,6 +6,11 @@ import { svelte } from '@sveltejs/vite-plugin-svelte';
 const host = process.env.TAURI_DEV_HOST;
 
 export default defineConfig({
+  // Base public path. Defaults to '/' (Tauri + local dev). The GitHub Pages
+  // web deployment sets VITE_BASE=/task-progress-tracker/ (see
+  // .github/workflows/deploy-web.yml).
+  base: process.env.VITE_BASE || '/',
+
   plugins: [svelte()],
 
   // Vitest (via `npm test`) reads its config from this file by default and

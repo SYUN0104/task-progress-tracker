@@ -72,6 +72,20 @@ These constraints are designed to work well for context switching, parallel work
 
 ## Development
 
+### Branch Workflow
+
+- **`dev`** — web-first iteration branch. Every push builds the browser version and deploys it to **GitHub Pages** (https://syun0104.github.io/task-progress-tracker/), so changes can be checked in a browser immediately without installing anything. The web version stores data in that browser's localStorage (independent from the desktop app's data).
+- **`main`** — release branch. When a change is ready, merge `dev` into `main` and push a `v*` tag; CI builds the Windows installer and publishes a GitHub Release.
+
+```bash
+# iterate on dev, check in the browser after each push
+git checkout dev && git push
+
+# ship: merge into main and tag
+git checkout main && git merge dev && git push
+git tag vX.Y.Z && git push origin vX.Y.Z
+```
+
 ### Prerequisites
 
 - **Node.js** 20 or later
