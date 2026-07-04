@@ -1,0 +1,5 @@
+/* Theme CSS variables (dark default, plan decision D9). Real token set
+   (colors, spacing, stale-highlight tints) lands with the Phase 3 UI work. */
+:root {
+  color-scheme: dark;
+}
