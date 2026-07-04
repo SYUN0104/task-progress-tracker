@@ -6,6 +6,7 @@
 import type { Action, AppState, Block, WorkUnit } from './types';
 import { isDescendant, subtreeIds } from './tree';
 import { canComplete, canDeleteWorkUnit, canDeleteArchived } from './rules';
+import { validateAppState } from './validate';
 
 /** Action types that are view-state only — the store must NOT push undo for these. */
 export const VIEW_STATE_ACTIONS: ReadonlySet<Action['type']> = new Set([
@@ -294,19 +295,41 @@ export function applyAction(state: AppState, action: Action): AppState {
         destWorkUnitId = action.newWorkUnitId;
       }
 
-      for (const b of s.blocks) {
-        if (b.holdRootId === action.blockId) {
-          b.accumulatedHeldMs += action.now - (b.heldAt ?? action.now);
-          b.heldAt = null;
-          b.holdRootId = null;
-          b.status = 'active';
-          b.workUnitId = destWorkUnitId;
+      const resumed = s.blocks.filter((b) => b.holdRootId === action.blockId);
+      for (const b of resumed) {
+        b.accumulatedHeldMs += action.now - (b.heldAt ?? action.now);
+        b.heldAt = null;
+        b.holdRootId = null;
+        b.status = 'active';
+        b.workUnitId = destWorkUnitId;
+      }
+
+      // Reparent orphans (review finding #2): a resumed block whose parent will
+      // NOT be active (held/completed/missing, and not itself resuming here)
+      // would otherwise be reachable from no section while its timer accrues.
+      // Promote such blocks to top-level in the destination column. Blocks whose
+      // parent IS active keep their intra-unit structure.
+      const byId = new Map(s.blocks.map((b) => [b.id, b]));
+      for (const b of resumed) {
+        if (b.parentId === null) continue;
+        const parent = byId.get(b.parentId);
+        if (!parent || parent.status !== 'active') {
+          b.parentId = null;
+          // Sort promoted blocks to the end of the destination top-level group.
+          b.order = Number.MAX_SAFE_INTEGER;
         }
       }
+
       // The hold note belongs to the Hold section; drop it on return to Active
       // (a fresh note is required by AC20 for any subsequent hold).
       r.annotation = undefined;
-      reindexSiblings(s.blocks, r.parentId, destWorkUnitId);
+
+      // Reindex every sibling group a resumed block now lives in.
+      const touchedParents = new Set<string | null>();
+      for (const b of resumed) touchedParents.add(b.parentId);
+      for (const parentId of touchedParents) {
+        reindexSiblings(s.blocks, parentId, destWorkUnitId);
+      }
       return s;
     }
 
@@ -347,7 +370,11 @@ export function applyAction(state: AppState, action: Action): AppState {
 
     // ---------------------------------------------------------------- import
     case 'importState': {
-      return structuredClone(action.state);
+      // Never trust an imported payload: validate the schema and no-op on any
+      // violation (review finding #1). validateAppState returns a fresh,
+      // normalized state, so no extra clone is needed.
+      const validated = validateAppState(action.state);
+      return validated ?? state;
     }
 
     default: {

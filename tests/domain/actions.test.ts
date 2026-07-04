@@ -5,6 +5,8 @@ import {
   isViewStateAction,
   elapsedMs,
   childrenOf,
+  activeColumns,
+  holdGrid,
 } from '../../src/lib/domain';
 import { Builder } from './_helpers';
 
@@ -170,6 +172,28 @@ describe('hold / resume (D3 nested-hold safety)', () => {
     });
   });
 
+  it('resuming an inner hold promotes the orphaned block to top-level (finding #2)', () => {
+    // Child held individually, then the parent held over it; resuming the
+    // CHILD's hold card must not leave the child reachable from no section.
+    const b = new Builder()
+      .createBlock('r', 'w')
+      .createChild('c', 'r')
+      .hold('c', { title: 'child note' }, 2000)
+      .hold('r', { title: 'ancestor note' }, 5000)
+      .resume('c', 8000);
+
+    // Child is active again and promoted to top-level (its parent is still held).
+    expect(b.block('c')).toMatchObject({ status: 'active', parentId: null, workUnitId: 'w' });
+
+    // It is now visible in the Active projection as a top-level block of column w.
+    const col = activeColumns(b.state).find((c) => c.workUnit.id === 'w')!;
+    expect(col.roots.map((n) => n.block.id)).toContain('c');
+
+    // The parent's hold card is intact (still held as its own unit).
+    const cards = holdGrid(b.state);
+    expect(cards.map((card) => card.root.id)).toEqual(['r']);
+  });
+
   it('elapsed is continuous across hold and resume', () => {
     const b = new Builder().createBlock('r', 'w', 'r', 1000).hold('r', { title: 'n' }, 5000);
     // Frozen while held.
@@ -290,6 +314,15 @@ describe('importState', () => {
 
     expect(target).toEqual(source);
     expect(target).not.toBe(source); // deep clone, not the same reference
+  });
+
+  it('is a no-op on an invalid payload (finding #1)', () => {
+    const before = new Builder().createBlock('r', 'w').state;
+    const after = applyAction(before, {
+      type: 'importState',
+      state: { blocks: null, workUnits: null, theme: 'dark' } as never,
+    });
+    expect(after).toBe(before); // rejected → same reference
   });
 });
 

@@ -14,6 +14,7 @@ import {
   applyAction,
   isViewStateAction,
   createEmptyState,
+  validateAppState,
   createUndoStack,
   pushUndo,
   popUndo,
@@ -27,6 +28,12 @@ import type { Platform } from './platform';
 /** Debounce window for auto-save after a mutation (AC31). */
 export const DEFAULT_DEBOUNCE_MS = 500;
 
+/** Outcome of loading persisted state at startup. */
+export type LoadStatus = 'loaded' | 'empty' | 'invalid';
+
+/** Outcome of importing a user-chosen JSON file. */
+export type ImportStatus = 'imported' | 'cancelled' | 'invalid';
+
 export interface TaskStore {
   /** Reactive application state (subscribe with `$appState`). */
   readonly appState: Readable<AppState>;
@@ -38,12 +45,20 @@ export interface TaskStore {
   undo(): void;
   /** Force any pending debounced save to run now (used on window close). */
   flush(): Promise<void>;
-  /** Load persisted state at startup (does not affect the undo stack). */
-  load(): Promise<void>;
+  /**
+   * Load persisted state at startup (does not affect the undo stack). Returns a
+   * status the UI can surface: 'loaded', 'empty' (nothing saved yet), or
+   * 'invalid' (unparseable/failed schema — empty state kept, nothing persisted).
+   */
+  load(): Promise<LoadStatus>;
   /** Export the current state as JSON via the platform. */
   exportJson(): Promise<void>;
-  /** Import state from a user-chosen JSON file (undoable). */
-  importJson(): Promise<void>;
+  /**
+   * Import state from a user-chosen JSON file (undoable). Returns 'imported',
+   * 'cancelled' (no file chosen), or 'invalid' (unparseable/failed schema —
+   * current state left untouched).
+   */
+  importJson(): Promise<ImportStatus>;
 }
 
 export interface StoreOptions {
@@ -63,6 +78,15 @@ export function createTaskStore(platform: Platform, options: StoreOptions = {}):
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let saveDirty = false;
 
+  // Serialize ALL persistence through one promise chain so a debounced save and
+  // a close-path flush can never run concurrently and clobber each other's
+  // temp file on the Rust side (review finding #5).
+  let persistChain: Promise<void> = Promise.resolve();
+
+  // Log a persistent-save failure once per failure streak, resetting on the
+  // next success — instead of silently swallowing it (review nit).
+  let saveFailing = false;
+
   const clearSaveTimer = () => {
     if (saveTimer !== null) {
       clearTimeout(saveTimer);
@@ -73,13 +97,26 @@ export function createTaskStore(platform: Platform, options: StoreOptions = {}):
   // Write the current state to the platform. Normal (debounced) writes use
   // saveState; the close-path flush uses flushState (D10) — functionally
   // identical on the Rust side, but a distinct command so the close-flush call
-  // site is explicit.
-  const writeState = async (useFlushCommand: boolean): Promise<void> => {
+  // site is explicit. The write is appended to `persistChain` and the snapshot
+  // JSON is captured now, so queued writes persist in dispatch order.
+  const writeState = (useFlushCommand: boolean): Promise<void> => {
     clearSaveTimer();
     saveDirty = false;
     const json = JSON.stringify(get(appState));
-    if (useFlushCommand) await platform.flushState(json);
-    else await platform.saveState(json);
+    persistChain = persistChain.then(async () => {
+      try {
+        if (useFlushCommand) await platform.flushState(json);
+        else await platform.saveState(json);
+        saveFailing = false;
+      } catch (err) {
+        if (!saveFailing) {
+          saveFailing = true;
+          // eslint-disable-next-line no-console
+          console.error('[taskStore] failed to persist state:', err);
+        }
+      }
+    });
+    return persistChain;
   };
 
   const schedulePersist = () => {
@@ -112,6 +149,19 @@ export function createTaskStore(platform: Platform, options: StoreOptions = {}):
     if (state === null) return;
     undoStack = stack;
     syncCanUndo();
+
+    // View-state (theme, per-block collapsed) bypasses undo, but snapshots
+    // captured it at push time. Re-apply the CURRENT view-state onto the
+    // restored snapshot so undoing a domain action does not revert a theme or
+    // collapse change made afterwards (review finding #4).
+    const current = get(appState);
+    state.theme = current.theme;
+    const collapsedById = new Map(current.blocks.map((b) => [b.id, b.collapsed]));
+    for (const b of state.blocks) {
+      const collapsed = collapsedById.get(b.id);
+      if (collapsed !== undefined) b.collapsed = collapsed;
+    }
+
     appState.set(state);
     schedulePersist();
   };
@@ -121,32 +171,59 @@ export function createTaskStore(platform: Platform, options: StoreOptions = {}):
   // lost, and cancels any pending debounced save.
   const flush = (): Promise<void> => writeState(true);
 
-  const load = async (): Promise<void> => {
+  const load = async (): Promise<LoadStatus> => {
     const json = await platform.loadState();
-    if (!json) return;
+    if (!json) return 'empty';
+
+    let parsed: unknown;
     try {
-      const parsed = JSON.parse(json) as AppState;
-      appState.set(parsed);
-    } catch {
-      // Corrupt payload: the persist layer already handles recovery/backup, so
-      // here we simply keep the fresh empty state.
+      parsed = JSON.parse(json);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[taskStore] persisted state is not valid JSON; keeping empty state:', err);
+      return 'invalid';
     }
+
+    const validated = validateAppState(parsed);
+    if (!validated) {
+      // eslint-disable-next-line no-console
+      console.error('[taskStore] persisted state failed schema validation; keeping empty state');
+      return 'invalid';
+    }
+
+    // Only set on success — never overwrite with, or persist, garbage.
+    appState.set(validated);
+    return 'loaded';
   };
 
   const exportJson = async (): Promise<void> => {
     await platform.exportJson(JSON.stringify(get(appState)));
   };
 
-  const importJson = async (): Promise<void> => {
+  const importJson = async (): Promise<ImportStatus> => {
     const json = await platform.importJson();
-    if (!json) return;
+    if (!json) return 'cancelled';
+
+    let parsed: unknown;
     try {
-      const parsed = JSON.parse(json) as AppState;
-      // Route through dispatch so the import is a single undoable action.
-      dispatch({ type: 'importState', state: parsed });
-    } catch {
-      // Ignore an unparseable import; leave current state untouched.
+      parsed = JSON.parse(json);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[taskStore] import is not valid JSON; state unchanged:', err);
+      return 'invalid';
     }
+
+    const validated = validateAppState(parsed);
+    if (!validated) {
+      // eslint-disable-next-line no-console
+      console.error('[taskStore] import failed schema validation; state unchanged');
+      return 'invalid';
+    }
+
+    // Route through dispatch so the import is a single undoable action; the
+    // reducer re-validates as a second guard.
+    dispatch({ type: 'importState', state: validated });
+    return 'imported';
   };
 
   return {

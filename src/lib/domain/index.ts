@@ -8,3 +8,4 @@ export * from './timer';
 export * from './undo';
 export * from './projections';
 export * from './actions';
+export * from './validate';
